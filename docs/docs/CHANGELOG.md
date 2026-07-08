@@ -13,6 +13,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 <!-- This changes the project to: -->
 
+- Add `PUBLIC_URL_DYNAMIC` to derive the public URL from the `X-Forwarded-Host` header so one Anubis instance can protect multiple domains via forwardAuth (requires `REDIRECT_DOMAINS`), and answer with `401` instead of redirecting when forwardAuth is misconfigured to check `/.within.website/*` paths (redirect loop protection).
 - Update QwantBot remote addresses range with latest value
 - Migrate check-spelling workflow config to [cspell](https://cspell.org/)
 - Add [Anubis Kubernetes Operator](https://github.com/eznix86/anubis-kubernetes-operator/) to the docs ([#1675](https://github.com/TecharoHQ/anubis/pull/1675)).

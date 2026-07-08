@@ -150,3 +150,33 @@ certificatesResolvers:
 providers:
   docker: {}
 ```
+
+## Protecting multiple domains with one Anubis instance
+
+`PUBLIC_URL` points to a single external URL, so with the setup above every
+challenge is served from `anubis.example.com` regardless of which domain the
+user requested. If one Anubis instance protects several unrelated domains, set
+`PUBLIC_URL_DYNAMIC=true` instead of `PUBLIC_URL`. Anubis then derives the
+challenge URL from the `X-Forwarded-Host` header, keeping the user on the
+domain they requested (which also keeps cookies scoped correctly).
+
+Requirements:
+
+- `REDIRECT_DOMAINS` must list every protected domain (wildcards like
+  `*.example.com` are supported). Anubis refuses to start otherwise, because
+  deriving the URL from a request header without an allowlist would let anyone
+  use Anubis as an open redirect.
+- The challenge path must be reachable on every protected domain: add a router
+  per domain (or one with a combined rule) that sends
+  ``PathPrefix(`/.within.website`)`` directly to the Anubis service *without*
+  the forwardAuth middleware, otherwise the challenge page itself gets
+  intercepted and Anubis answers with `401` to break the redirect loop.
+
+```yaml
+  anubis:
+    environment:
+      - "TARGET= "
+      - PUBLIC_URL_DYNAMIC=true
+      - REDIRECT_DOMAINS=example.com,*.example.com,other-domain.org
+      - COOKIE_DYNAMIC_DOMAIN=true
+```

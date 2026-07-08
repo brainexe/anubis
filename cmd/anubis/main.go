@@ -83,6 +83,7 @@ var (
 	webmasterEmail           = flag.String("webmaster-email", "", "if set, displays webmaster's email on the reject page for appeals")
 	versionFlag              = flag.Bool("version", false, "print Anubis version")
 	publicUrl                = flag.String("public-url", "", "the externally accessible URL for this Anubis instance, used for constructing redirect URLs (e.g., for forwardAuth).")
+	publicUrlDynamic         = flag.Bool("public-url-dynamic", false, "derive PUBLIC_URL from the X-Forwarded-Host header for multi-domain deployments, requires REDIRECT_DOMAINS to be set")
 	xffStripPrivate          = flag.Bool("xff-strip-private", true, "if set, strip private addresses from X-Forwarded-For")
 	customRealIPHeader       = flag.String("custom-real-ip-header", "", "if set, read remote IP from header of this name (in case your environment doesn't set X-Real-IP header)")
 
@@ -257,6 +258,14 @@ func main() {
 		log.Fatalf("you can't set COOKIE_DOMAIN and COOKIE_DYNAMIC_DOMAIN at the same time")
 	}
 
+	if *publicUrlDynamic && *publicUrl != "" {
+		lg.Warn("PUBLIC_URL_DYNAMIC is set but PUBLIC_URL is also set; PUBLIC_URL will be ignored in favor of X-Forwarded-Host")
+	}
+
+	if *publicUrlDynamic && *redirectDomains == "" {
+		log.Fatalf("PUBLIC_URL_DYNAMIC requires REDIRECT_DOMAINS to be set, otherwise Anubis can be used as an open redirect")
+	}
+
 	// Thoth configuration
 	switch {
 	case *thothURL != "" && *thothToken == "":
@@ -422,6 +431,7 @@ func main() {
 		CookieHttpOnly:           *cookieHttpOnly,
 		CookieSameSite:           parseSameSite(*cookieSameSite),
 		PublicUrl:                *publicUrl,
+		PublicUrlDynamic:         *publicUrlDynamic,
 		JWTRestrictionHeader:     *jwtRestrictionHeader,
 		Logger:                   policy.Logger.With("subsystem", "anubis"),
 		DifficultyInJWT:          *difficultyInJWT,

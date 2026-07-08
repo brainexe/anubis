@@ -30,6 +30,9 @@ var domainMatchRegexp = regexp.MustCompile(`^((xn--)?[a-z0-9]+(-[a-z0-9]+)*\.)+[
 
 var (
 	ErrActualAnubisBug = errors.New("this is an actual bug in Anubis, please file an issue with the magic string 'taco bell'")
+	// ErrRedirectLoop is returned when forwardAuth is misconfigured to check /.within.website/* paths,
+	// causing a redirect loop. In this case, we should return 401 to let the challenge page be served.
+	ErrRedirectLoop = errors.New("redirect loop detected: forwardAuth should not check /.within.website/* paths")
 )
 
 // matchRedirectDomain returns true if host matches any of the allowed redirect
@@ -195,17 +198,25 @@ func (s *Server) RenderIndex(w http.ResponseWriter, r *http.Request, cr policy.C
 	localizer := localization.GetLocalizer(r)
 
 	if returnHTTPStatusOnly {
-		if s.opts.PublicUrl == "" {
+		if s.opts.PublicUrl == "" && !s.opts.PublicUrlDynamic {
 			w.WriteHeader(http.StatusUnauthorized)
 			w.Write([]byte(localizer.T("authorization_required"))) //nolint:errcheck
-		} else {
-			redirectURL, err := s.constructRedirectURL(r)
-			if err != nil {
-				s.respondWithStatus(w, r, err.Error(), "", http.StatusBadRequest)
+			return
+		}
+
+		redirectURL, err := s.constructRedirectURL(r)
+		if err != nil {
+			// If redirect loop detected (forwardAuth checking /.within.website/*),
+			// return 401 to let the challenge page be served directly
+			if errors.Is(err, ErrRedirectLoop) {
+				w.WriteHeader(http.StatusUnauthorized)
+				w.Write([]byte(localizer.T("authorization_required"))) //nolint:errcheck
 				return
 			}
-			http.Redirect(w, r, redirectURL, http.StatusTemporaryRedirect)
+			s.respondWithStatus(w, r, err.Error(), "", http.StatusBadRequest)
+			return
 		}
+		http.Redirect(w, r, redirectURL, http.StatusTemporaryRedirect)
 		return
 	}
 
@@ -307,6 +318,13 @@ func (s *Server) constructRedirectURL(r *http.Request) (string, error) {
 		return "", errors.New(localizer.T("missing_required_forwarded_headers"))
 	}
 
+	// Prevent redirect loop: if the request is already for the challenge page,
+	// don't redirect back to it. This can happen if forwardAuth is misconfigured
+	// to also check /.within.website/* paths.
+	if strings.HasPrefix(uri, anubis.BasePrefix+"/.within.website") {
+		return "", ErrRedirectLoop
+	}
+
 	switch proto {
 	case "http", "https":
 		// allowed
@@ -325,7 +343,14 @@ func (s *Server) constructRedirectURL(r *http.Request) (string, error) {
 
 	redir := proto + "://" + host + uri
 	escapedURL := url.QueryEscape(redir)
-	return fmt.Sprintf("%s/.within.website/?redir=%s", s.opts.PublicUrl, escapedURL), nil
+
+	baseUrl := s.opts.PublicUrl
+	if s.opts.PublicUrlDynamic {
+		// Derive from forwarded headers for multi-domain support. The host has
+		// already been validated against RedirectDomains above.
+		baseUrl = proto + "://" + host
+	}
+	return fmt.Sprintf("%s/.within.website/?redir=%s", baseUrl, escapedURL), nil
 }
 
 func (s *Server) RenderBench(w http.ResponseWriter, r *http.Request) {

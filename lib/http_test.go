@@ -1,9 +1,12 @@
 package lib
 
 import (
+	"errors"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"strings"
 	"testing"
 
 	"github.com/TecharoHQ/anubis"
@@ -235,5 +238,176 @@ func TestRejectsHostlessRedirect(t *testing.T) {
 	}
 	if got := rr.Header().Get("Location"); got != "" {
 		t.Fatalf("expected no Location header on rejected redirect, got %q", got)
+	}
+}
+
+func TestRenderIndexSubrequest(t *testing.T) {
+	for _, tt := range []struct {
+		name         string
+		opts         Options
+		forwardedURI string
+		wantStatus   int
+		wantPrefix   string
+	}{
+		{
+			name:         "dynamic public URL redirects to forwarded host",
+			opts:         Options{PublicUrlDynamic: true},
+			forwardedURI: "/page",
+			wantStatus:   http.StatusTemporaryRedirect,
+			wantPrefix:   "https://mitdemherzensehen.de/.within.website/",
+		},
+		{
+			name:         "static public URL redirects to configured host",
+			opts:         Options{PublicUrl: "https://anubis.example.com"},
+			forwardedURI: "/page",
+			wantStatus:   http.StatusTemporaryRedirect,
+			wantPrefix:   "https://anubis.example.com/.within.website/",
+		},
+		{
+			name:         "no public URL returns 401 even with forwarded headers",
+			opts:         Options{},
+			forwardedURI: "/page",
+			wantStatus:   http.StatusUnauthorized,
+		},
+		{
+			name:         "redirect loop returns 401 instead of redirecting",
+			opts:         Options{PublicUrlDynamic: true},
+			forwardedURI: "/.within.website/?redir=https%3A%2F%2Fmitdemherzensehen.de%2F",
+			wantStatus:   http.StatusUnauthorized,
+		},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			s := &Server{
+				opts:   tt.opts,
+				logger: slog.Default(),
+				policy: &policy.ParsedConfig{},
+			}
+			req := httptest.NewRequest("GET", "/", nil)
+			req.Header.Set("X-Forwarded-Proto", "https")
+			req.Header.Set("X-Forwarded-Host", "mitdemherzensehen.de")
+			req.Header.Set("X-Forwarded-Uri", tt.forwardedURI)
+
+			rr := httptest.NewRecorder()
+			s.RenderIndex(rr, req, policy.CheckResult{}, nil, true)
+
+			if rr.Code != tt.wantStatus {
+				t.Errorf("expected status %d, got %d", tt.wantStatus, rr.Code)
+			}
+
+			location := rr.Header().Get("Location")
+			if tt.wantPrefix == "" && location != "" {
+				t.Errorf("expected no Location header, got: %s", location)
+			}
+			if tt.wantPrefix != "" && !strings.HasPrefix(location, tt.wantPrefix) {
+				t.Errorf("expected redirect to start with %q, got: %s", tt.wantPrefix, location)
+			}
+		})
+	}
+}
+
+func TestConstructRedirectURLDynamic(t *testing.T) {
+	for _, tt := range []struct {
+		name          string
+		opts          Options
+		forwardedHost string
+		forwardedURI  string
+		wantErr       error
+		wantErrAny    bool
+		wantPrefix    string
+		wantRedir     string
+	}{
+		{
+			name: "derives base URL and redir param from forwarded headers",
+			opts: Options{
+				PublicUrlDynamic: true,
+				RedirectDomains:  []string{"mitdemherzensehen.de", "example.com"},
+			},
+			forwardedHost: "mitdemherzensehen.de",
+			forwardedURI:  "/protected/page",
+			wantPrefix:    "https://mitdemherzensehen.de/.within.website/",
+			wantRedir:     "https://mitdemherzensehen.de/protected/page",
+		},
+		{
+			name: "dynamic overrides static public URL",
+			opts: Options{
+				PublicUrl:        "https://static.anubis.example.com",
+				PublicUrlDynamic: true,
+				RedirectDomains:  []string{"dynamic.example.com"},
+			},
+			forwardedHost: "dynamic.example.com",
+			forwardedURI:  "/page",
+			wantPrefix:    "https://dynamic.example.com/.within.website/",
+		},
+		{
+			name: "static public URL used when dynamic is off",
+			opts: Options{
+				PublicUrl:       "https://static.anubis.example.com",
+				RedirectDomains: []string{"dynamic.example.com"},
+			},
+			forwardedHost: "dynamic.example.com",
+			forwardedURI:  "/page",
+			wantPrefix:    "https://static.anubis.example.com/.within.website/",
+		},
+		{
+			name: "forwarded host not in redirect domains is rejected",
+			opts: Options{
+				PublicUrlDynamic: true,
+				RedirectDomains:  []string{"mitdemherzensehen.de"},
+			},
+			forwardedHost: "evil.example.com",
+			forwardedURI:  "/page",
+			wantErrAny:    true,
+		},
+		{
+			name:          "challenge page URI returns ErrRedirectLoop",
+			opts:          Options{PublicUrlDynamic: true},
+			forwardedHost: "example.com",
+			forwardedURI:  "/.within.website/?redir=https%3A%2F%2Fexample.com%2F",
+			wantErr:       ErrRedirectLoop,
+		},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			s := &Server{
+				opts:   tt.opts,
+				logger: slog.Default(),
+				policy: &policy.ParsedConfig{},
+			}
+			req := httptest.NewRequest("GET", "/", nil)
+			req.Header.Set("X-Forwarded-Proto", "https")
+			req.Header.Set("X-Forwarded-Host", tt.forwardedHost)
+			req.Header.Set("X-Forwarded-Uri", tt.forwardedURI)
+
+			redirectURL, err := s.constructRedirectURL(req)
+
+			if tt.wantErr != nil {
+				if !errors.Is(err, tt.wantErr) {
+					t.Fatalf("expected error %v, got: %v", tt.wantErr, err)
+				}
+				return
+			}
+			if tt.wantErrAny {
+				if err == nil {
+					t.Fatalf("expected an error, got redirect URL: %s", redirectURL)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+
+			if !strings.HasPrefix(redirectURL, tt.wantPrefix) {
+				t.Errorf("expected redirect to start with %q, got: %s", tt.wantPrefix, redirectURL)
+			}
+
+			if tt.wantRedir != "" {
+				parsed, err := url.Parse(redirectURL)
+				if err != nil {
+					t.Fatalf("failed to parse redirect URL: %v", err)
+				}
+				if redir := parsed.Query().Get("redir"); redir != tt.wantRedir {
+					t.Errorf("expected redir param to be %q, got %q", tt.wantRedir, redir)
+				}
+			}
+		})
 	}
 }

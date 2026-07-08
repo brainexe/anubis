@@ -52,6 +52,7 @@ type Options struct {
 	Logger                   *slog.Logger
 	LogLevel                 string
 	PublicUrl                string
+	PublicUrlDynamic         bool
 	JWTRestrictionHeader     string
 	DifficultyInJWT          bool
 }

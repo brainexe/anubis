@@ -87,7 +87,6 @@ func TestRedirectSecurity(t *testing.T) {
 			xForwardedUri:   "/bar",
 			shouldError:     false,
 		},
-
 		// serveHTTPNext tests - redir parameter validation
 		{
 			name:              "serveHTTPNext: javascript: URL should be rejected",
