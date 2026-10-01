@@ -1,8 +1,10 @@
 VERSION= $(shell cat ./VERSION)
 GO?= go
 NPM?= npm
+DOCKER_REPO?= git.mdoetsch.de/matze/anubis
+DOCKER_TAG?= latest
 
-.PHONY: build assets deps lint prebaked-build test
+.PHONY: build assets deps lint prebaked-build test docker
 
 all: build
 
@@ -31,3 +33,7 @@ prebaked-build:
 
 test: assets
 	$(GO) test ./...
+
+docker:
+	docker build -t $(DOCKER_REPO):$(DOCKER_TAG) --build-arg VERSION=$(VERSION) . --push
+#	docker push $(DOCKER_REPO):$(DOCKER_TAG)
